@@ -1,14 +1,22 @@
 (async function () {
   console.log("[InfoBlock Interceptor] loaded");
 
-  // Keep the latest K assistant messages that have an infoblock
+  // --- CONFIG ---
+  // Keep the newest K assistant messages that contain an infoblock.
+  // You asked for "remove all except the last", so K = 1.
   const KEEP_LAST_N = 1;
 
-  // Matches ANY fenced code block ```...```, with optional language (md/markdown/anything).
-  const ANY_FENCE = /```[^\n]*\n[\s\S]*?```/g;
+  // Define what an "infoblock" is:
+  // Any fenced block starting with ```md or ```markdown (case-insensitive).
+  // Example: ```md\nLocation: ...\n```
+  const INFOBLOCK_FENCE = /```(?:md|markdown)\s*\r?\n[\s\S]*?```/gim;
 
-  // Heuristic to decide whether a fenced block is *your* infoblock and not unrelated code.
-  const LOOKS_LIKE_INFOBLOCK = /(?:^|\n)\s*Location:|Characters intents:|Emotional state:|Positions:|Outfits:|Remember:/i;
+  // --- HELPERS ---
+  function isAssistant(msg) {
+    if (typeof msg?.is_user === "boolean") return msg.is_user === false;
+    if (typeof msg?.role === "string") return msg.role === "assistant";
+    return false;
+  }
 
   function getText(msg) {
     if (typeof msg?.mes === "string") return msg.mes;
@@ -21,57 +29,52 @@
     else if (typeof msg?.content === "string") msg.content = newText;
   }
 
-  function isAssistant(msg) {
-    if (typeof msg?.is_user === "boolean") return msg.is_user === false;
-    if (typeof msg?.role === "string") return msg.role === "assistant";
-    return false;
-  }
-
-  // True if message contains an infoblock-like fenced section
-  function hasInfoBlock(text) {
+  function containsInfoBlock(text) {
     if (!text) return false;
-    ANY_FENCE.lastIndex = 0;
-    let m;
-    while ((m = ANY_FENCE.exec(text)) !== null) {
-      if (LOOKS_LIKE_INFOBLOCK.test(m[0])) return true;
-    }
-    return false;
+    INFOBLOCK_FENCE.lastIndex = 0;
+    return INFOBLOCK_FENCE.test(text);
   }
 
-  // Remove only the fenced blocks that look like your infoblock
   function stripInfoBlocks(text) {
     if (!text) return text;
-    return text.replace(ANY_FENCE, (block) => {
-      return LOOKS_LIKE_INFOBLOCK.test(block) ? "" : block;
-    }).trim();
+    // Remove ALL fenced md/markdown blocks from this text
+    return text.replace(INFOBLOCK_FENCE, "").trim();
   }
 
+  // The function name must match "generate_interceptor" in manifest.json
   globalThis.stripOldInfoBlocks = async function (chat, contextSize, abort, type) {
     try {
-      // Find assistant message indices that contain an infoblock
+      // 1) Find assistant messages that contain at least one infoblock
       const idxWithBlocks = [];
       for (let i = 0; i < chat.length; i++) {
         const msg = chat[i];
         if (!isAssistant(msg)) continue;
-        const t = getText(msg);
-        if (hasInfoBlock(t)) idxWithBlocks.push(i);
+        if (containsInfoBlock(getText(msg))) idxWithBlocks.push(i);
       }
 
-      if (idxWithBlocks.length <= KEEP_LAST_N) return;
+      if (idxWithBlocks.length === 0) {
+        // Nothing to do
+        return chat;
+      }
 
-      // Keep the newest K, prune the rest (older ones)
-      const toPrune = idxWithBlocks.slice(0, -KEEP_LAST_N);
+      // 2) Keep only the newest KEEP_LAST_N; prune the rest
+      const toPrune = idxWithBlocks.slice(0, Math.max(0, idxWithBlocks.length - KEEP_LAST_N));
 
+      // 3) Prune by cloning only the messages we modify (ephemeral)
       for (const idx of toPrune) {
-        // clone then mutate (ephemeral—visible chat stays intact)
-        const clone = structuredClone(chat[idx]);
-        setText(clone, stripInfoBlocks(getText(clone)));
+        const original = chat[idx];
+        const clone = structuredClone(original);
+        const before = getText(clone);
+        const after = stripInfoBlocks(before);
+        setText(clone, after);
         chat[idx] = clone;
+        console.log(`[InfoBlock Interceptor] pruned infoblock(s) from msg index ${idx}`);
       }
 
-      console.log("[InfoBlock Interceptor] pruned indices:", toPrune);
+      return chat; // IMPORTANT for some builds
     } catch (e) {
       console.error("[InfoBlock Interceptor] error:", e);
+      return chat; // Fail-safe
     }
   };
 })();
