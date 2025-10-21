@@ -1,0 +1,9 @@
+{
+  "display_name": "InfoBlock Interceptor",
+  "author": "Sultan",
+  "version": "1.0.0",
+  "js": "index.js",
+  "loading_order": 1,
+  "generate_interceptor": "stripOldInfoBlocks",
+  "minimum_client_version": "1.0.0"
+}
