@@ -1,12 +1,13 @@
 {
   "display_name": "Infoblock Filter",
-  "loading_order": 1,
+  "loading_order": 100,
   "requires": [],
   "optional": [],
   "js": "index.js",
-  "css": "",
-  "author": "Custom",
+  "css": "style.css",
+  "author": "sulaljuhani",
   "version": "1.0.0",
-  "homePage": "",
-  "auto_update": false
+  "homePage": "https://github.com/sulaljuhani/ST-Infoblock",
+  "auto_update": false,
+  "description": "Removes all infoblocks except the most recent one from chat history to reduce token usage."
 }
