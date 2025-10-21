@@ -1,9 +1,12 @@
 {
-  "display_name": "InfoBlock Interceptor",
-  "author": "Sultan",
-  "version": "1.0.0",
-  "js": "index.js",
+  "display_name": "Infoblock Filter",
   "loading_order": 1,
-  "generate_interceptor": "stripOldInfoBlocks",
-  "minimum_client_version": "1.0.0"
+  "requires": [],
+  "optional": [],
+  "js": "index.js",
+  "css": "",
+  "author": "Custom",
+  "version": "1.0.0",
+  "homePage": "",
+  "auto_update": false
 }
