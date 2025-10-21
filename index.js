@@ -1,213 +1,217 @@
-// SillyTavern Extension: Remove all infoblocks except the last one
-// This version hooks into the prompt modification pipeline
+// Infoblock Filter Extension for SillyTavern
+// Removes all infoblocks except the most recent one
 
-import { eventSource, event_types } from '../../../script.js';
-import { extension_settings, saveSettingsDebounced } from '../../../../script.js';
-import { power_user } from '../../../power-user.js';
-
-const extensionName = 'infoblock-filter';
-
-const defaultSettings = {
-    enabled: true
-};
-
-// Regular expression to match infoblock content
-const infoblockRegex = /<infoblock>\s*```md\n[\s\S]*?```\s*<\/infoblock>/g;
-
-function getSettings() {
-    if (!extension_settings.infoblock_filter) {
-        extension_settings.infoblock_filter = structuredClone(defaultSettings);
-    }
-    return extension_settings.infoblock_filter;
-}
-
-function saveSettings() {
-    saveSettingsDebounced();
-}
-
-/**
- * Processes messages array and removes all infoblocks except the last one
- */
-function processMessages(messages) {
-    const settings = getSettings();
+(function() {
+    'use strict';
     
-    if (!settings.enabled || !Array.isArray(messages) || messages.length === 0) {
-        return messages;
-    }
-
-    console.log(`[${extensionName}] Processing ${messages.length} messages`);
+    const extensionName = 'infoblock-filter';
+    let isEnabled = true;
     
-    // Find the last message containing an infoblock
-    let lastInfoblockIndex = -1;
+    // More flexible regex that matches the actual structure
+    const infoblockRegex = /<infoblock>[\s\S]*?<\/infoblock>/gi;
     
-    for (let i = messages.length - 1; i >= 0; i--) {
-        const message = messages[i];
-        // Check different possible message structures
-        const content = message.content || message.mes || '';
+    console.log(`[${extensionName}] Extension initializing...`);
+    
+    /**
+     * Process messages array and remove old infoblocks
+     */
+    function processMessages(messages) {
+        if (!messages || !Array.isArray(messages) || messages.length === 0) {
+            return messages;
+        }
         
-        if (typeof content === 'string') {
-            infoblockRegex.lastIndex = 0;
-            if (infoblockRegex.test(content)) {
+        console.log(`[${extensionName}] Processing ${messages.length} messages`);
+        
+        // Find the index of the last message containing an infoblock
+        let lastInfoblockIndex = -1;
+        
+        for (let i = messages.length - 1; i >= 0; i--) {
+            const content = messages[i].content || '';
+            if (typeof content === 'string' && infoblockRegex.test(content)) {
                 lastInfoblockIndex = i;
                 console.log(`[${extensionName}] Found last infoblock at index ${i}`);
                 break;
             }
-        }
-    }
-    
-    // If no infoblock found, return original messages
-    if (lastInfoblockIndex === -1) {
-        console.log(`[${extensionName}] No infoblocks found`);
-        return messages;
-    }
-    
-    // Create modified copy of messages
-    const modifiedMessages = messages.map((message, i) => {
-        if (i === lastInfoblockIndex) {
-            // Keep the last infoblock as-is
-            return message;
-        }
-        
-        // Get content from either 'content' or 'mes' field
-        const content = message.content || message.mes || '';
-        
-        if (typeof content === 'string') {
+            // Reset regex for next iteration
             infoblockRegex.lastIndex = 0;
-            const newContent = content.replace(infoblockRegex, '').trim();
-            
-            if (newContent !== content) {
-                console.log(`[${extensionName}] Removed infoblock from message ${i}`);
-                // Create a new message object with modified content
-                const modifiedMessage = { ...message };
-                if (message.content !== undefined) {
-                    modifiedMessage.content = newContent;
-                }
-                if (message.mes !== undefined) {
-                    modifiedMessage.mes = newContent;
-                }
-                return modifiedMessage;
-            }
         }
         
-        return message;
-    });
-    
-    return modifiedMessages;
-}
-
-/**
- * Hook into the message sending pipeline
- */
-function hookIntoGeneration() {
-    // Store original Generate function
-    const originalGenerate = window.Generate;
-    
-    if (typeof originalGenerate === 'function') {
-        window.Generate = async function(...args) {
-            console.log(`[${extensionName}] Intercepting Generate call`);
-            
-            // Get the context
-            const context = SillyTavern.getContext();
-            if (context && context.chat) {
-                // Process the chat before generation
-                context.chat = processMessages(context.chat);
+        if (lastInfoblockIndex === -1) {
+            console.log(`[${extensionName}] No infoblocks found in messages`);
+            return messages;
+        }
+        
+        // Process messages
+        let removedCount = 0;
+        const processedMessages = messages.map((msg, index) => {
+            // Keep the last infoblock message unchanged
+            if (index === lastInfoblockIndex) {
+                return msg;
             }
             
-            // Call original function
-            return originalGenerate.apply(this, args);
-        };
+            const content = msg.content || '';
+            if (typeof content === 'string') {
+                infoblockRegex.lastIndex = 0;
+                const hasInfoblock = infoblockRegex.test(content);
+                
+                if (hasInfoblock) {
+                    infoblockRegex.lastIndex = 0;
+                    const cleanedContent = content.replace(infoblockRegex, '').trim();
+                    removedCount++;
+                    console.log(`[${extensionName}] Removed infoblock from message ${index}`);
+                    return {
+                        ...msg,
+                        content: cleanedContent
+                    };
+                }
+            }
+            
+            return msg;
+        });
         
-        console.log(`[${extensionName}] Hooked into Generate function`);
+        console.log(`[${extensionName}] Removed ${removedCount} old infoblock(s)`);
+        return processedMessages;
     }
-}
-
-/**
- * Alternative hook using event system
- */
-function setupEventListeners() {
-    // Listen for generation events
-    eventSource.on(event_types.GENERATION_STARTED, () => {
-        const settings = getSettings();
-        if (!settings.enabled) return;
-        
-        const context = SillyTavern.getContext();
-        if (context && context.chat) {
-            console.log(`[${extensionName}] Processing on GENERATION_STARTED`);
-            context.chat = processMessages(context.chat);
-        }
-    });
     
-    // Also process on chat change
-    eventSource.on(event_types.CHAT_CHANGED, () => {
-        const settings = getSettings();
-        if (!settings.enabled) return;
+    /**
+     * Intercept fetch requests
+     */
+    const originalFetch = window.fetch;
+    window.fetch = async function(...args) {
+        const [url, options] = args;
         
-        const context = SillyTavern.getContext();
-        if (context && context.chat) {
-            console.log(`[${extensionName}] Processing on CHAT_CHANGED`);
-            context.chat = processMessages(context.chat);
+        // Check if this is an API request with a body
+        if (options && options.body && typeof options.body === 'string') {
+            try {
+                const data = JSON.parse(options.body);
+                
+                // Check if it has messages array (OpenAI/Claude format)
+                if (data.messages && Array.isArray(data.messages) && isEnabled) {
+                    console.log(`[${extensionName}] Intercepting fetch request to:`, url);
+                    console.log(`[${extensionName}] Original message count: ${data.messages.length}`);
+                    
+                    // Process the messages
+                    data.messages = processMessages(data.messages);
+                    
+                    // Update the body with processed messages
+                    options.body = JSON.stringify(data);
+                    console.log(`[${extensionName}] Modified request sent`);
+                }
+            } catch (e) {
+                // Not JSON or parsing error - continue normally
+            }
         }
-    });
+        
+        return originalFetch.apply(this, args);
+    };
     
-    console.log(`[${extensionName}] Event listeners registered`);
-}
-
-/**
- * Create settings UI
- */
-function createSettingsUI() {
-    const html = `
-        <div class="infoblock-filter-settings">
-            <div class="inline-drawer">
-                <div class="inline-drawer-toggle inline-drawer-header">
-                    <b>Infoblock Filter</b>
-                    <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
-                </div>
-                <div class="inline-drawer-content">
-                    <label class="checkbox_label" for="infoblock_filter_enabled">
-                        <input type="checkbox" id="infoblock_filter_enabled" />
-                        <span>Enable Infoblock Filter</span>
-                    </label>
-                    <div class="note">
-                        <small>Removes all infoblocks except the most recent one from chat history to reduce token usage.</small>
+    /**
+     * Intercept XMLHttpRequest (backup method)
+     */
+    const originalXHRSend = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.send = function(body) {
+        if (body && typeof body === 'string' && isEnabled) {
+            try {
+                const data = JSON.parse(body);
+                
+                if (data.messages && Array.isArray(data.messages)) {
+                    console.log(`[${extensionName}] Intercepting XHR request`);
+                    console.log(`[${extensionName}] Original message count: ${data.messages.length}`);
+                    
+                    data.messages = processMessages(data.messages);
+                    body = JSON.stringify(data);
+                    console.log(`[${extensionName}] Modified XHR request sent`);
+                }
+            } catch (e) {
+                // Not JSON or parsing error - continue normally
+            }
+        }
+        
+        return originalXHRSend.call(this, body);
+    };
+    
+    console.log(`[${extensionName}] Fetch and XHR interceptors installed`);
+    
+    /**
+     * Create settings UI
+     */
+    function createUI() {
+        const settingsHTML = `
+            <div class="infoblock-filter-settings">
+                <div class="inline-drawer">
+                    <div class="inline-drawer-toggle inline-drawer-header">
+                        <b>Infoblock Filter</b>
+                        <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
                     </div>
-                    <hr>
-                    <div class="note">
-                        <small><strong>How it works:</strong> This extension scans your chat history and removes all <code>&lt;infoblock&gt;</code> sections except for the last one, keeping your context window clean while maintaining the current state tracking.</small>
+                    <div class="inline-drawer-content">
+                        <label class="checkbox_label" for="infoblock_filter_enabled">
+                            <input type="checkbox" id="infoblock_filter_enabled" checked />
+                            <span>Enable Infoblock Filter</span>
+                        </label>
+                        <div style="margin-top: 10px;">
+                            <small>Removes all <code>&lt;infoblock&gt;</code> sections except the most recent one to reduce token usage.</small>
+                        </div>
+                        <div style="margin-top: 10px;">
+                            <button id="infoblock_filter_test" class="menu_button">
+                                <i class="fa-solid fa-flask"></i>
+                                Test Filter
+                            </button>
+                        </div>
+                        <div id="infoblock_filter_status" style="margin-top: 10px; font-size: 12px; color: #888;"></div>
                     </div>
                 </div>
             </div>
-        </div>
-    `;
-    
-    $('#extensions_settings2').append(html);
-    
-    const settings = getSettings();
-    $('#infoblock_filter_enabled').prop('checked', settings.enabled);
-    
-    $('#infoblock_filter_enabled').on('change', function() {
-        const settings = getSettings();
-        settings.enabled = $(this).prop('checked');
-        saveSettings();
-        console.log(`[${extensionName}] Extension ${settings.enabled ? 'enabled' : 'disabled'}`);
-    });
-}
-
-/**
- * Initialize extension
- */
-jQuery(async () => {
-    // Wait for SillyTavern to be ready
-    while (!window.SillyTavern) {
-        await new Promise(resolve => setTimeout(resolve, 100));
+        `;
+        
+        $('#extensions_settings2').append(settingsHTML);
+        
+        // Event listener for enable/disable
+        $('#infoblock_filter_enabled').on('change', function() {
+            isEnabled = $(this).prop('checked');
+            console.log(`[${extensionName}] Extension ${isEnabled ? 'enabled' : 'disabled'}`);
+            updateStatus();
+        });
+        
+        // Test button
+        $('#infoblock_filter_test').on('click', function() {
+            console.log(`[${extensionName}] Running test...`);
+            const testMessages = [
+                { role: 'user', content: 'Hello' },
+                { role: 'assistant', content: 'Hi there!\n<infoblock>\n```md\nTest: Old\n```\n</infoblock>' },
+                { role: 'user', content: 'How are you?' },
+                { role: 'assistant', content: 'Good!\n<infoblock>\n```md\nTest: New\n```\n</infoblock>' }
+            ];
+            
+            const result = processMessages(testMessages);
+            const hasOldInfoblock = result[1].content.includes('<infoblock>');
+            const hasNewInfoblock = result[3].content.includes('<infoblock>');
+            
+            if (!hasOldInfoblock && hasNewInfoblock) {
+                $('#infoblock_filter_status').html('<span style="color: #4CAF50;">✓ Test passed! Filter is working correctly.</span>');
+            } else {
+                $('#infoblock_filter_status').html('<span style="color: #f44336;">✗ Test failed. Check console for details.</span>');
+            }
+            
+            console.log(`[${extensionName}] Test result:`, result);
+        });
+        
+        updateStatus();
     }
     
-    createSettingsUI();
-    setupEventListeners();
-    hookIntoGeneration();
+    function updateStatus() {
+        if (isEnabled) {
+            $('#infoblock_filter_status').html('<span style="color: #4CAF50;">Active - Filtering infoblocks</span>');
+        } else {
+            $('#infoblock_filter_status').html('<span style="color: #ff9800;">Disabled</span>');
+        }
+    }
     
-    console.log(`[${extensionName}] Extension loaded successfully`);
+    // Initialize when DOM is ready
+    jQuery(async () => {
+        // Wait a bit for SillyTavern to fully load
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        createUI();
+        console.log(`[${extensionName}] Extension loaded and ready`);
+    });
     
-    const settings = getSettings();
-    console.log(`[${extensionName}] Current settings:`, settings);
-});
+})();
