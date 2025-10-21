@@ -7,9 +7,6 @@
     const extensionName = 'infoblock-filter';
     let isEnabled = true;
     
-    // More flexible regex that matches the actual structure
-    const infoblockRegex = /<infoblock>[\s\S]*?<\/infoblock>/gi;
-    
     console.log(`[${extensionName}] Extension initializing...`);
     
     /**
@@ -27,13 +24,15 @@
         
         for (let i = messages.length - 1; i >= 0; i--) {
             const content = messages[i].content || '';
-            if (typeof content === 'string' && infoblockRegex.test(content)) {
-                lastInfoblockIndex = i;
-                console.log(`[${extensionName}] Found last infoblock at index ${i}`);
-                break;
+            if (typeof content === 'string') {
+                // Create fresh regex for each test to avoid state issues
+                const infoblockTestRegex = /<infoblock>[\s\S]*?<\/infoblock>/i;
+                if (infoblockTestRegex.test(content)) {
+                    lastInfoblockIndex = i;
+                    console.log(`[${extensionName}] Found last infoblock at index ${i}`);
+                    break;
+                }
             }
-            // Reset regex for next iteration
-            infoblockRegex.lastIndex = 0;
         }
         
         if (lastInfoblockIndex === -1) {
@@ -51,12 +50,12 @@
             
             const content = msg.content || '';
             if (typeof content === 'string') {
-                infoblockRegex.lastIndex = 0;
-                const hasInfoblock = infoblockRegex.test(content);
+                // Create fresh regex for each test and replace
+                const infoblockTestRegex = /<infoblock>[\s\S]*?<\/infoblock>/i;
+                const infoblockReplaceRegex = /<infoblock>[\s\S]*?<\/infoblock>/gi;
                 
-                if (hasInfoblock) {
-                    infoblockRegex.lastIndex = 0;
-                    const cleanedContent = content.replace(infoblockRegex, '').trim();
+                if (infoblockTestRegex.test(content)) {
+                    const cleanedContent = content.replace(infoblockReplaceRegex, '').trim();
                     removedCount++;
                     console.log(`[${extensionName}] Removed infoblock from message ${index}`);
                     return {
