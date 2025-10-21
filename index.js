@@ -1,7 +1,7 @@
 (async function () {
   console.log("[InfoBlock Interceptor] loaded");
 
-  // --- CONFIG ---
+  // --- CONFIG ----
   // Keep the newest K assistant messages that contain an infoblock.
   // You asked for "remove all except the last", so K = 1.
   const KEEP_LAST_N = 1;
