@@ -1,0 +1,10 @@
+.infoblock-filter-settings {
+    margin: 10px 0;
+    padding: 10px;
+}
+
+.infoblock-filter-settings small {
+    display: block;
+    margin-top: 5px;
+    color: #888;
+}
