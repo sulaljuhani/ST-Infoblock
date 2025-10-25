@@ -77,21 +77,62 @@
      */
     const originalFetch = window.fetch;
     window.fetch = async function(...args) {
-        const [url, options] = args;
-        
-        // Check if this is an API request with a body
+        const [urlOrRequest, options] = args;
+
+        async function handleRequest(request, initOptions) {
+            if (!isEnabled) {
+                return initOptions !== undefined
+                    ? originalFetch.call(this, request, initOptions)
+                    : originalFetch.call(this, request);
+            }
+
+            try {
+                const clonedRequest = request.clone();
+                const bodyText = await clonedRequest.text();
+
+                if (bodyText) {
+                    const data = JSON.parse(bodyText);
+
+                    if (data.messages && Array.isArray(data.messages)) {
+                        console.log(`[${extensionName}] Intercepting fetch request to:`, clonedRequest.url);
+                        console.log(`[${extensionName}] Original message count: ${data.messages.length}`);
+
+                        data.messages = processMessages(data.messages);
+
+                        const rewrittenInit = initOptions ? { ...initOptions } : {};
+                        rewrittenInit.body = JSON.stringify(data);
+
+                        const modifiedRequest = new Request(clonedRequest, rewrittenInit);
+                        console.log(`[${extensionName}] Modified request sent`);
+                        return originalFetch.call(this, modifiedRequest);
+                    }
+                }
+            } catch (e) {
+                // Not JSON or parsing error - continue normally
+            }
+
+            return initOptions !== undefined
+                ? originalFetch.call(this, request, initOptions)
+                : originalFetch.call(this, request);
+        }
+
+        if (urlOrRequest instanceof Request) {
+            return handleRequest.call(this, urlOrRequest, options);
+        }
+
+        // Check if this is an API request with a body provided via options
         if (options && options.body && typeof options.body === 'string') {
             try {
                 const data = JSON.parse(options.body);
-                
+
                 // Check if it has messages array (OpenAI/Claude format)
                 if (data.messages && Array.isArray(data.messages) && isEnabled) {
-                    console.log(`[${extensionName}] Intercepting fetch request to:`, url);
+                    console.log(`[${extensionName}] Intercepting fetch request to:`, urlOrRequest);
                     console.log(`[${extensionName}] Original message count: ${data.messages.length}`);
-                    
+
                     // Process the messages
                     data.messages = processMessages(data.messages);
-                    
+
                     // Update the body with processed messages
                     options.body = JSON.stringify(data);
                     console.log(`[${extensionName}] Modified request sent`);
@@ -100,7 +141,7 @@
                 // Not JSON or parsing error - continue normally
             }
         }
-        
+
         return originalFetch.apply(this, args);
     };
     
