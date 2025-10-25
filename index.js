@@ -18,6 +18,32 @@
         return infoblockTestRegex.test(content);
     }
 
+    function contentHasInfoblock(content) {
+        if (typeof content === 'string') {
+            return hasInfoblock(content);
+        }
+
+        if (Array.isArray(content)) {
+            return content.some(part => {
+                if (typeof part === 'string') {
+                    return hasInfoblock(part);
+                }
+
+                if (part && typeof part === 'object' && typeof part.text === 'string') {
+                    return hasInfoblock(part.text);
+                }
+
+                return false;
+            });
+        }
+
+        if (content && typeof content === 'object' && typeof content.text === 'string') {
+            return hasInfoblock(content.text);
+        }
+
+        return false;
+    }
+
     function stripInfoblocks(content) {
         const infoblockReplaceRegex = /<infoblock(?:\s[^>]*)?>[\s\S]*?<\/infoblock>/gi;
         return content.replace(infoblockReplaceRegex, '').trim();
@@ -26,7 +52,7 @@
     function findLastInfoblockIndex(items, getContent) {
         for (let i = items.length - 1; i >= 0; i--) {
             const content = getContent(items[i]);
-            if (typeof content === 'string' && hasInfoblock(content)) {
+            if (contentHasInfoblock(content)) {
                 return i;
             }
         }
@@ -34,17 +60,124 @@
         return -1;
     }
 
+    const defaultGetContent = message => {
+        if (!message) {
+            return '';
+        }
+
+        if (Object.prototype.hasOwnProperty.call(message, 'mes')) {
+            return message.mes;
+        }
+
+        if (Object.prototype.hasOwnProperty.call(message, 'content')) {
+            return message.content;
+        }
+
+        return '';
+    };
+
+    const defaultSetContent = (message, value) => {
+        if (!message) {
+            return;
+        }
+
+        if (Object.prototype.hasOwnProperty.call(message, 'mes')) {
+            message.mes = value;
+        } else if (Object.prototype.hasOwnProperty.call(message, 'content')) {
+            message.content = value;
+        }
+    };
+
+    function cleanContentStructure(content) {
+        if (typeof content === 'string') {
+            if (!hasInfoblock(content)) {
+                return { cleanedContent: content, modified: false };
+            }
+
+            const cleaned = stripInfoblocks(content);
+            return { cleanedContent: cleaned, modified: cleaned !== content };
+        }
+
+        if (Array.isArray(content)) {
+            let modified = false;
+            const cleanedParts = content.map(part => {
+                if (typeof part === 'string') {
+                    if (!hasInfoblock(part)) {
+                        return part;
+                    }
+
+                    const cleanedPart = stripInfoblocks(part);
+                    if (cleanedPart !== part) {
+                        modified = true;
+                    }
+
+                    return cleanedPart;
+                }
+
+                if (part && typeof part === 'object' && typeof part.text === 'string') {
+                    if (!hasInfoblock(part.text)) {
+                        return part;
+                    }
+
+                    const cleanedText = stripInfoblocks(part.text);
+                    if (cleanedText !== part.text) {
+                        modified = true;
+                        return {
+                            ...part,
+                            text: cleanedText
+                        };
+                    }
+
+                    return part;
+                }
+
+                return part;
+            });
+
+            if (!modified) {
+                return { cleanedContent: content, modified: false };
+            }
+
+            return { cleanedContent: cleanedParts, modified: true };
+        }
+
+        if (content && typeof content === 'object' && typeof content.text === 'string') {
+            if (!hasInfoblock(content.text)) {
+                return { cleanedContent: content, modified: false };
+            }
+
+            const cleanedText = stripInfoblocks(content.text);
+
+            if (cleanedText === content.text) {
+                return { cleanedContent: content, modified: false };
+            }
+
+            return {
+                cleanedContent: {
+                    ...content,
+                    text: cleanedText
+                },
+                modified: true
+            };
+        }
+
+        return { cleanedContent: content, modified: false };
+    }
+
     /**
      * Process messages array and remove old infoblocks
      */
-    function processMessages(messages) {
+    function processMessages(messages, accessors = {}) {
         if (!messages || !Array.isArray(messages) || messages.length === 0) {
             return messages;
         }
 
         console.log(`[${extensionName}] Processing ${messages.length} messages`);
 
-        const lastInfoblockIndex = findLastInfoblockIndex(messages, msg => msg?.content || '');
+        const getContent = typeof accessors.getContent === 'function' ? accessors.getContent : defaultGetContent;
+        const setContent = typeof accessors.setContent === 'function' ? accessors.setContent : defaultSetContent;
+
+        const lastInfoblockIndex = findLastInfoblockIndex(messages, getContent);
 
         if (lastInfoblockIndex === -1) {
             console.log(`[${extensionName}] No infoblocks found in messages`);
@@ -59,18 +192,22 @@
                 return msg;
             }
 
-            const content = msg?.content || '';
-            if (typeof content === 'string' && hasInfoblock(content)) {
-                const cleanedContent = stripInfoblocks(content);
-                removedCount++;
-                console.log(`[${extensionName}] Removed infoblock from message ${index}`);
-                return {
-                    ...msg,
-                    content: cleanedContent
-                };
+            const content = getContent(msg);
+            const { cleanedContent, modified } = cleanContentStructure(content);
+
+            if (!modified) {
+                return msg;
             }
 
-            return msg;
+            removedCount++;
+            console.log(`[${extensionName}] Removed infoblock from message ${index}`);
+
+            // Supported message shapes: { mes: string }, { content: string }, { content: [...parts] } with text entries.
+            const updatedMessage = {
+                ...msg
+            };
+            setContent(updatedMessage, cleanedContent);
+            return updatedMessage;
         });
 
         console.log(`[${extensionName}] Removed ${removedCount} old infoblock(s)`);
@@ -82,33 +219,8 @@
             return null;
         }
 
-        const getContent = message => {
-            if (!message) {
-                return '';
-            }
-
-            if (Object.prototype.hasOwnProperty.call(message, 'mes')) {
-                return message.mes;
-            }
-
-            if (Object.prototype.hasOwnProperty.call(message, 'content')) {
-                return message.content;
-            }
-
-            return '';
-        };
-
-        const setContent = (message, value) => {
-            if (!message) {
-                return;
-            }
-
-            if (Object.prototype.hasOwnProperty.call(message, 'mes')) {
-                message.mes = value;
-            } else if (Object.prototype.hasOwnProperty.call(message, 'content')) {
-                message.content = value;
-            }
-        };
+        const getContent = defaultGetContent;
+        const setContent = defaultSetContent;
 
         const lastInfoblockIndex = findLastInfoblockIndex(chatMessages, getContent);
 
@@ -125,20 +237,17 @@
             }
 
             const content = getContent(chatMessages[i]);
+            const { cleanedContent, modified } = cleanContentStructure(content);
 
-            if (typeof content === 'string' && hasInfoblock(content)) {
-                const cleanedContent = stripInfoblocks(content);
+            if (modified) {
+                modifications.push({
+                    message: chatMessages[i],
+                    property: Object.prototype.hasOwnProperty.call(chatMessages[i], 'mes') ? 'mes' : 'content',
+                    original: content
+                });
 
-                if (cleanedContent !== content) {
-                    modifications.push({
-                        message: chatMessages[i],
-                        property: Object.prototype.hasOwnProperty.call(chatMessages[i], 'mes') ? 'mes' : 'content',
-                        original: content
-                    });
-
-                    setContent(chatMessages[i], cleanedContent);
-                    removedCount++;
-                }
+                setContent(chatMessages[i], cleanedContent);
+                removedCount++;
             }
         }
 
@@ -155,7 +264,7 @@
         }
 
         modifications.forEach(({ message, property, original }) => {
-            if (!message || typeof original !== 'string') {
+            if (!message) {
                 return;
             }
 
