@@ -9,6 +9,32 @@
     
     console.log(`[${extensionName}] Extension initializing...`);
     
+    const INFOBLOCK_TEST_REGEX = /<infoblock\b[^>]*>[\s\S]*?<\/infoblock>/i;
+    const INFOBLOCK_REPLACE_REGEX = /<infoblock\b[^>]*>[\s\S]*?<\/infoblock>/gi;
+
+    function hasInfoblock(content) {
+        if (typeof content !== 'string' || !content) {
+            return false;
+        }
+
+        return INFOBLOCK_TEST_REGEX.test(content);
+    }
+
+    function stripInfoblocks(content) {
+        return content.replace(INFOBLOCK_REPLACE_REGEX, '').trim();
+    }
+
+    function findLastInfoblockIndex(items, getContent) {
+        for (let i = items.length - 1; i >= 0; i--) {
+            const content = getContent(items[i]);
+            if (typeof content === 'string' && hasInfoblock(content)) {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
     /**
      * Process messages array and remove old infoblocks
      */
@@ -16,60 +42,130 @@
         if (!messages || !Array.isArray(messages) || messages.length === 0) {
             return messages;
         }
-        
+
         console.log(`[${extensionName}] Processing ${messages.length} messages`);
-        
-        // Find the index of the last message containing an infoblock
-        let lastInfoblockIndex = -1;
-        
-        for (let i = messages.length - 1; i >= 0; i--) {
-            const content = messages[i].content || '';
-            if (typeof content === 'string') {
-                // Create fresh regex for each test to avoid state issues
-                const infoblockTestRegex = /<infoblock>[\s\S]*?<\/infoblock>/i;
-                if (infoblockTestRegex.test(content)) {
-                    lastInfoblockIndex = i;
-                    console.log(`[${extensionName}] Found last infoblock at index ${i}`);
-                    break;
-                }
-            }
-        }
-        
+
+        const lastInfoblockIndex = findLastInfoblockIndex(messages, msg => msg?.content || '');
+
         if (lastInfoblockIndex === -1) {
             console.log(`[${extensionName}] No infoblocks found in messages`);
             return messages;
         }
-        
-        // Process messages
+
+        console.log(`[${extensionName}] Found last infoblock at index ${lastInfoblockIndex}`);
+
         let removedCount = 0;
         const processedMessages = messages.map((msg, index) => {
-            // Keep the last infoblock message unchanged
             if (index === lastInfoblockIndex) {
                 return msg;
             }
-            
-            const content = msg.content || '';
-            if (typeof content === 'string') {
-                // Create fresh regex for each test and replace
-                const infoblockTestRegex = /<infoblock>[\s\S]*?<\/infoblock>/i;
-                const infoblockReplaceRegex = /<infoblock>[\s\S]*?<\/infoblock>/gi;
-                
-                if (infoblockTestRegex.test(content)) {
-                    const cleanedContent = content.replace(infoblockReplaceRegex, '').trim();
-                    removedCount++;
-                    console.log(`[${extensionName}] Removed infoblock from message ${index}`);
-                    return {
-                        ...msg,
-                        content: cleanedContent
-                    };
-                }
+
+            const content = msg?.content || '';
+            if (typeof content === 'string' && hasInfoblock(content)) {
+                const cleanedContent = stripInfoblocks(content);
+                removedCount++;
+                console.log(`[${extensionName}] Removed infoblock from message ${index}`);
+                return {
+                    ...msg,
+                    content: cleanedContent
+                };
             }
-            
+
             return msg;
         });
-        
+
         console.log(`[${extensionName}] Removed ${removedCount} old infoblock(s)`);
         return processedMessages;
+    }
+
+    function applyInfoblockFilterToChat(chatMessages) {
+        if (!Array.isArray(chatMessages) || chatMessages.length === 0) {
+            return null;
+        }
+
+        const getContent = message => {
+            if (!message) {
+                return '';
+            }
+
+            if (Object.prototype.hasOwnProperty.call(message, 'mes')) {
+                return message.mes;
+            }
+
+            if (Object.prototype.hasOwnProperty.call(message, 'content')) {
+                return message.content;
+            }
+
+            return '';
+        };
+
+        const setContent = (message, value) => {
+            if (!message) {
+                return;
+            }
+
+            if (Object.prototype.hasOwnProperty.call(message, 'mes')) {
+                message.mes = value;
+            } else if (Object.prototype.hasOwnProperty.call(message, 'content')) {
+                message.content = value;
+            }
+        };
+
+        const lastInfoblockIndex = findLastInfoblockIndex(chatMessages, getContent);
+
+        if (lastInfoblockIndex === -1) {
+            return null;
+        }
+
+        const modifications = [];
+        let removedCount = 0;
+
+        for (let i = 0; i < chatMessages.length; i++) {
+            if (i === lastInfoblockIndex) {
+                continue;
+            }
+
+            const content = getContent(chatMessages[i]);
+
+            if (typeof content === 'string' && hasInfoblock(content)) {
+                const cleanedContent = stripInfoblocks(content);
+
+                if (cleanedContent !== content) {
+                    modifications.push({
+                        message: chatMessages[i],
+                        property: Object.prototype.hasOwnProperty.call(chatMessages[i], 'mes') ? 'mes' : 'content',
+                        original: content
+                    });
+
+                    setContent(chatMessages[i], cleanedContent);
+                    removedCount++;
+                }
+            }
+        }
+
+        if (removedCount > 0) {
+            console.log(`[${extensionName}] Temporarily removed ${removedCount} infoblock(s) from chat history before formatting`);
+        }
+
+        return modifications.length ? modifications : null;
+    }
+
+    function restoreChatModifications(modifications) {
+        if (!Array.isArray(modifications)) {
+            return;
+        }
+
+        modifications.forEach(({ message, property, original }) => {
+            if (!message || typeof original !== 'string') {
+                return;
+            }
+
+            if (property === 'mes') {
+                message.mes = original;
+            } else if (property === 'content') {
+                message.content = original;
+            }
+        });
     }
     
     /**
@@ -77,21 +173,62 @@
      */
     const originalFetch = window.fetch;
     window.fetch = async function(...args) {
-        const [url, options] = args;
-        
-        // Check if this is an API request with a body
+        const [urlOrRequest, options] = args;
+
+        async function handleRequest(request, initOptions) {
+            if (!isEnabled) {
+                return initOptions !== undefined
+                    ? originalFetch.call(this, request, initOptions)
+                    : originalFetch.call(this, request);
+            }
+
+            try {
+                const clonedRequest = request.clone();
+                const bodyText = await clonedRequest.text();
+
+                if (bodyText) {
+                    const data = JSON.parse(bodyText);
+
+                    if (data.messages && Array.isArray(data.messages)) {
+                        console.log(`[${extensionName}] Intercepting fetch request to:`, clonedRequest.url);
+                        console.log(`[${extensionName}] Original message count: ${data.messages.length}`);
+
+                        data.messages = processMessages(data.messages);
+
+                        const rewrittenInit = initOptions ? { ...initOptions } : {};
+                        rewrittenInit.body = JSON.stringify(data);
+
+                        const modifiedRequest = new Request(clonedRequest, rewrittenInit);
+                        console.log(`[${extensionName}] Modified request sent`);
+                        return originalFetch.call(this, modifiedRequest);
+                    }
+                }
+            } catch (e) {
+                // Not JSON or parsing error - continue normally
+            }
+
+            return initOptions !== undefined
+                ? originalFetch.call(this, request, initOptions)
+                : originalFetch.call(this, request);
+        }
+
+        if (urlOrRequest instanceof Request) {
+            return handleRequest.call(this, urlOrRequest, options);
+        }
+
+        // Check if this is an API request with a body provided via options
         if (options && options.body && typeof options.body === 'string') {
             try {
                 const data = JSON.parse(options.body);
-                
+
                 // Check if it has messages array (OpenAI/Claude format)
                 if (data.messages && Array.isArray(data.messages) && isEnabled) {
-                    console.log(`[${extensionName}] Intercepting fetch request to:`, url);
+                    console.log(`[${extensionName}] Intercepting fetch request to:`, urlOrRequest);
                     console.log(`[${extensionName}] Original message count: ${data.messages.length}`);
-                    
+
                     // Process the messages
                     data.messages = processMessages(data.messages);
-                    
+
                     // Update the body with processed messages
                     options.body = JSON.stringify(data);
                     console.log(`[${extensionName}] Modified request sent`);
@@ -100,7 +237,7 @@
                 // Not JSON or parsing error - continue normally
             }
         }
-        
+
         return originalFetch.apply(this, args);
     };
     
@@ -176,14 +313,14 @@
             console.log(`[${extensionName}] Running test...`);
             const testMessages = [
                 { role: 'user', content: 'Hello' },
-                { role: 'assistant', content: 'Hi there!\n<infoblock>\n```md\nTest: Old\n```\n</infoblock>' },
+                { role: 'assistant', content: 'Hi there!\n<infoblock data-v="1">\n```md\nTest: Old\n```\n</infoblock>' },
                 { role: 'user', content: 'How are you?' },
-                { role: 'assistant', content: 'Good!\n<infoblock>\n```md\nTest: New\n```\n</infoblock>' }
+                { role: 'assistant', content: 'Good!\n<infoblock data-v="2">\n```md\nTest: New\n```\n</infoblock>' }
             ];
-            
+
             const result = processMessages(testMessages);
-            const hasOldInfoblock = result[1].content.includes('<infoblock>');
-            const hasNewInfoblock = result[3].content.includes('<infoblock>');
+            const hasOldInfoblock = hasInfoblock(result[1].content);
+            const hasNewInfoblock = hasInfoblock(result[3].content);
             
             if (!hasOldInfoblock && hasNewInfoblock) {
                 $('#infoblock_filter_status').html('<span style="color: #4CAF50;">✓ Test passed! Filter is working correctly.</span>');
@@ -206,10 +343,63 @@
     }
     
     // Initialize when DOM is ready
+    function wrapGenerateWhenReady() {
+        const maxAttempts = 40;
+        let attempts = 0;
+
+        const intervalId = setInterval(() => {
+            const generateFn = window.generate;
+
+            if (typeof generateFn === 'function') {
+                clearInterval(intervalId);
+
+                if (generateFn.__infoblockFilterWrapped) {
+                    return;
+                }
+
+                const originalGenerate = generateFn;
+
+                const wrappedGenerate = async function(...args) {
+                    let modifications = null;
+
+                    if (isEnabled && Array.isArray(window.chat)) {
+                        try {
+                            modifications = applyInfoblockFilterToChat(window.chat);
+                        } catch (error) {
+                            console.error(`[${extensionName}] Failed to apply pre-format infoblock filtering:`, error);
+                        }
+                    }
+
+                    try {
+                        return await originalGenerate.apply(this, args);
+                    } finally {
+                        if (modifications) {
+                            restoreChatModifications(modifications);
+                        }
+                    }
+                };
+
+                wrappedGenerate.__infoblockFilterWrapped = true;
+                window.generate = wrappedGenerate;
+
+                console.log(`[${extensionName}] generate() wrapped for pre-format infoblock filtering`);
+                return;
+            }
+
+            attempts++;
+
+            if (attempts >= maxAttempts) {
+                clearInterval(intervalId);
+                console.warn(`[${extensionName}] Unable to hook generate(); relying on network interception only`);
+            }
+        }, 250);
+    }
+
     jQuery(async () => {
         // Wait a bit for SillyTavern to fully load
         await new Promise(resolve => setTimeout(resolve, 1000));
         createUI();
+        wrapGenerateWhenReady();
         console.log(`[${extensionName}] Extension loaded and ready`);
     });
     
