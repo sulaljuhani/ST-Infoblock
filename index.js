@@ -174,15 +174,14 @@
     window.fetch = async function(...args) {
         const [urlOrRequest, options] = args;
 
-        async function handleRequest(request, initOptions) {
+        // Handle requests created with the Request constructor and no options passed
+        if (urlOrRequest instanceof Request && options === undefined) {
             if (!isEnabled) {
-                return initOptions !== undefined
-                    ? originalFetch.call(this, request, initOptions)
-                    : originalFetch.call(this, request);
+                return originalFetch.call(this, urlOrRequest);
             }
 
             try {
-                const clonedRequest = request.clone();
+                const clonedRequest = urlOrRequest.clone();
                 const bodyText = await clonedRequest.text();
 
                 if (bodyText) {
@@ -194,10 +193,10 @@
 
                         data.messages = processMessages(data.messages);
 
-                        const rewrittenInit = initOptions ? { ...initOptions } : {};
-                        rewrittenInit.body = JSON.stringify(data);
+                        const modifiedRequest = new Request(clonedRequest, {
+                            body: JSON.stringify(data)
+                        });
 
-                        const modifiedRequest = new Request(clonedRequest, rewrittenInit);
                         console.log(`[${extensionName}] Modified request sent`);
                         return originalFetch.call(this, modifiedRequest);
                     }
@@ -206,13 +205,7 @@
                 // Not JSON or parsing error - continue normally
             }
 
-            return initOptions !== undefined
-                ? originalFetch.call(this, request, initOptions)
-                : originalFetch.call(this, request);
-        }
-
-        if (urlOrRequest instanceof Request) {
-            return handleRequest.call(this, urlOrRequest, options);
+            return originalFetch.call(this, urlOrRequest);
         }
 
         // Check if this is an API request with a body provided via options
