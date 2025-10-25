@@ -336,53 +336,88 @@
     
     // Initialize when DOM is ready
     function wrapGenerateWhenReady() {
-        const maxAttempts = 40;
-        let attempts = 0;
+        const entryPoints = [
+            { name: 'generate', description: 'window.generate' },
+            { name: 'Generate', description: 'window.Generate' },
+            { name: 'callGenerate', description: 'window.callGenerate' }
+        ];
+        const wrapMarker = '__infoblockFilterWrapped';
+        const originalRefMarker = '__infoblockFilterOriginal';
+        const maxAttemptsWithoutWrap = 40;
+        let attemptsWithoutWrap = 0;
+        let hasWrappedAtLeastOne = false;
+        let warnedAboutFailure = false;
 
-        const intervalId = setInterval(() => {
-            const generateFn = window.generate;
+        const ensureEntryPointWrapped = ({ name, description }) => {
+            const generateFn = window[name];
 
-            if (typeof generateFn === 'function') {
-                clearInterval(intervalId);
+            if (typeof generateFn !== 'function') {
+                return false;
+            }
 
-                if (generateFn.__infoblockFilterWrapped) {
-                    return;
+            if (generateFn[wrapMarker]) {
+                return true;
+            }
+
+            const originalGenerate = generateFn;
+
+            const wrappedGenerate = async function(...args) {
+                let modifications = null;
+
+                if (isEnabled && Array.isArray(window.chat)) {
+                    try {
+                        modifications = applyInfoblockFilterToChat(window.chat);
+                    } catch (error) {
+                        console.error(`[${extensionName}] Failed to apply pre-format infoblock filtering:`, error);
+                    }
                 }
 
-                const originalGenerate = generateFn;
-
-                const wrappedGenerate = async function(...args) {
-                    let modifications = null;
-
-                    if (isEnabled && Array.isArray(window.chat)) {
-                        try {
-                            modifications = applyInfoblockFilterToChat(window.chat);
-                        } catch (error) {
-                            console.error(`[${extensionName}] Failed to apply pre-format infoblock filtering:`, error);
-                        }
+                try {
+                    return await originalGenerate.apply(this, args);
+                } finally {
+                    if (modifications) {
+                        restoreChatModifications(modifications);
                     }
+                }
+            };
 
-                    try {
-                        return await originalGenerate.apply(this, args);
-                    } finally {
-                        if (modifications) {
-                            restoreChatModifications(modifications);
-                        }
-                    }
-                };
+            Object.defineProperty(wrappedGenerate, wrapMarker, {
+                value: true,
+                configurable: true
+            });
+            Object.defineProperty(wrappedGenerate, originalRefMarker, {
+                value: originalGenerate,
+                configurable: true
+            });
 
-                wrappedGenerate.__infoblockFilterWrapped = true;
-                window.generate = wrappedGenerate;
+            window[name] = wrappedGenerate;
 
-                console.log(`[${extensionName}] generate() wrapped for pre-format infoblock filtering`);
+            console.log(`[${extensionName}] ${description} wrapped for pre-format infoblock filtering`);
+            return true;
+        };
+
+        setInterval(() => {
+            let wrappedThisTick = false;
+
+            for (const entryPoint of entryPoints) {
+                if (ensureEntryPointWrapped(entryPoint)) {
+                    wrappedThisTick = true;
+                }
+            }
+
+            if (wrappedThisTick) {
+                hasWrappedAtLeastOne = true;
+                attemptsWithoutWrap = 0;
                 return;
             }
 
-            attempts++;
+            if (!hasWrappedAtLeastOne) {
+                attemptsWithoutWrap++;
 
-            if (attempts >= maxAttempts) {
-                clearInterval(intervalId);
-                console.warn(`[${extensionName}] Unable to hook generate(); relying on network interception only`);
+                if (!warnedAboutFailure && attemptsWithoutWrap >= maxAttemptsWithoutWrap) {
+                    warnedAboutFailure = true;
+                    console.warn(`[${extensionName}] Unable to hook any generation entry point; relying on network interception only`);
+                }
             }
         }, 250);
     }
