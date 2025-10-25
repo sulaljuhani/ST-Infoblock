@@ -14,12 +14,12 @@
             return false;
         }
 
-        const infoblockTestRegex = /<infoblock>[\s\S]*?<\/infoblock>/i;
+        const infoblockTestRegex = /<infoblock(?:\s[^>]*)?>[\s\S]*?<\/infoblock>/i;
         return infoblockTestRegex.test(content);
     }
 
     function stripInfoblocks(content) {
-        const infoblockReplaceRegex = /<infoblock>[\s\S]*?<\/infoblock>/gi;
+        const infoblockReplaceRegex = /<infoblock(?:\s[^>]*)?>[\s\S]*?<\/infoblock>/gi;
         return content.replace(infoblockReplaceRegex, '').trim();
     }
 
@@ -305,14 +305,14 @@
             console.log(`[${extensionName}] Running test...`);
             const testMessages = [
                 { role: 'user', content: 'Hello' },
-                { role: 'assistant', content: 'Hi there!\n<infoblock>\n```md\nTest: Old\n```\n</infoblock>' },
+                { role: 'assistant', content: 'Hi there!\n<infoblock data-v="1">\n```md\nTest: Old\n```\n</infoblock>' },
                 { role: 'user', content: 'How are you?' },
-                { role: 'assistant', content: 'Good!\n<infoblock>\n```md\nTest: New\n```\n</infoblock>' }
+                { role: 'assistant', content: 'Good!\n<infoblock data-v="2">\n```md\nTest: New\n```\n</infoblock>' }
             ];
-            
+
             const result = processMessages(testMessages);
-            const hasOldInfoblock = result[1].content.includes('<infoblock>');
-            const hasNewInfoblock = result[3].content.includes('<infoblock>');
+            const hasOldInfoblock = result[1].content.includes('<infoblock');
+            const hasNewInfoblock = result[3].content.includes('<infoblock');
             
             if (!hasOldInfoblock && hasNewInfoblock) {
                 $('#infoblock_filter_status').html('<span style="color: #4CAF50;">✓ Test passed! Filter is working correctly.</span>');
